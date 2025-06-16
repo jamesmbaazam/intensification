@@ -92,7 +92,7 @@ if __name__ == "__main__":
                   color=colors["9-23M"],alpha=0.9,
                   marker="o",lw=1,markersize=9,
                   ls="None",
-                  label="12 to 23M campaigns")
+                  label="9 to 23M campaigns")
 
     ## Finish up
     scat.set_xscale("log")
@@ -160,7 +160,7 @@ if __name__ == "__main__":
     ax2.set_xticks([0,0.1,0.2,0.3,0.4])
     ax2.set_ylim((0,None))
     ax2.set_xlabel("Per dose efficacy")
-    ax2.text(0.97,0.97,"9 to 23M\ncampaigns",
+    ax2.text(0.97,0.97,"9 to 23M\nIRIs",
              ha="right",va="top",
              color=colors["9-23M"],fontsize=22,
              transform=ax2.transAxes)
