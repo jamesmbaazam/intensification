@@ -709,6 +709,116 @@ def fit_the_regularized_model(state,state_df,state_sias,hood_t,initial_mu_guess=
     neglp.mu_var = overall_var[1:]  
 
     ## Finally, fully specify the transmission parameters using the
+    ## SIA and reporting rate estimates via the optimization above. In this case
+    ## we relax the alpha = 1 constraint leveraged to make the optimization faster
+    ## in the previous section. See the discussion under appendix 2, equation 7.
+    adj_cases = ((state_df["cases"].values+1.)/neglp.r_hat)-1.
+    adj_births = state_df["adj_births"].values
+    adj_sias = (neglp.mu*neglp.sias[:-1]).sum(axis=1)
+    E_t = adj_cases[1:]
+    I_t = adj_cases[:-1]
+    S_t = np.exp(neglp.logS0)+np.cumsum(state_df["adj_births"].values[:-1]-E_t-adj_sias)
+
+    ## Which let's us estimate via a single log-linear regression 
+    ## the alpha != 1 model parameters...
+    print("\nSpecifying the final transmission term...")
+    Y_t = np.log(E_t)-np.log(S_t)
+    X = np.hstack([neglp.X[:neglp.T,1:],np.log(I_t)[:,np.newaxis]])
+    pRW2 = np.zeros((X.shape[1],X.shape[1]))
+    pRW2[:-1,:-1] = neglp.pRW2
+    C = np.linalg.inv(np.dot(X.T,X)+pRW2)
+    beta_hat = np.dot(C,np.dot(X.T,Y_t))
+    beta_t = np.dot(X,beta_hat)
+    RSS = np.sum((Y_t-beta_t)**2)
+    sig_eps = np.sqrt(RSS/(neglp.T))#-X.shape[1]))
+    print("sig_eps = {}".format(sig_eps))
+    beta_cov = sig_eps*sig_eps*C
+    beta_var = np.diag(beta_cov)
+    beta_std = np.sqrt(beta_var)
+    beta_t_std = np.sqrt(np.diag(np.dot(X,np.dot(beta_cov,X.T))))
+    inf_seasonality = np.exp(beta_hat[:-1])
+    inf_seasonality_std = np.exp(beta_hat[:-1])*beta_std[:-1]
+    alpha = beta_hat[-1]
+    alpha_std = beta_std[-1]
+    print("alpha = {} +/- {}".format(alpha,2.*alpha_std))
+
+    return neglp, inf_seasonality, inf_seasonality_std, alpha, sig_eps
+
+def fit_the_regularized_model_smooth_rt(state,state_df,state_sias,hood_t,initial_mu_guess=0.5):
+
+	'''This is just like the function above, but the final specification of the transmission term
+	forces a smooth r_t over time to illustrate the effect of conventional time-correlation in reporting
+	rate estimation. This is NOT used at all in the manuscript, but is a valuable illustration of how different
+	correlation structures can affect outputs and model performance on forecast tests. The function is written to
+	directly replace fit_the_regularized_model(...) in any script. '''
+
+	## Then use that estimate of the compartments to
+    ## inform seasonality in the state level model.
+    neglp = HoodRegularizedModel(
+    			state_df,
+                state_sias,
+                state_df["initial_S0"].values[0],
+                state_df["initial_S0_var"].values[0],
+                hood_t,
+                beta_corr=3.,
+                tau=24,
+                mu_guess=initial_mu_guess)
+
+    ## Fit the model by first finding good SIAS given the
+    ## coarse regression approximation to r_t
+    x0 = np.ones((neglp.num_sias+1,))
+    x0[0] = neglp.logS0_prior
+    x0[1:] = neglp.mu
+    sia_op = minimize(neglp.fixed_rt,
+                      x0=x0,
+                      jac=neglp.fixed_rt_grad,
+                      method="L-BFGS-B",
+                      bounds=[(None,None)]+(len(x0)-1)*[(0,1)],
+                      options={"ftol":1e-13,
+                               "maxcor":100,
+                               },
+                      )
+    print("\nResult from fixed r_t SIA optimization for just {}:".format(state))
+    print("Success = {}".format(sia_op.success))
+    neglp.logS0 = sia_op["x"][0]
+    neglp.mu = sia_op["x"][1:]
+
+    ## Then adjust the reporting rate given the SIAs
+    x0 = np.ones((1+neglp.T+1,))
+    x0[0] = neglp.logS0
+    x0[1:] = neglp.r_hat
+    rep_op = minimize(neglp.fixed_mu,
+                      x0=x0,
+                      jac=neglp.fixed_mu_grad,
+                      method="L-BFGS-B",
+                      bounds=[(None,None)]+(len(x0)-1)*[(5.e-4,1)],
+                      options={"ftol":1e-13,
+                               "maxcor":100,
+                               },
+                      )
+    print("\n...And from fixed SIA r_t optimization")
+    print("Success = {}".format(rep_op.success))
+    neglp.logS0 = rep_op["x"][0]
+
+    ## Smooth the estimate
+    from scipy.signal import savgol_filter
+    rt_smooth = savgol_filter(rep_op["x"][1:],49,3)
+    neglp.r_hat = rt_smooth #rep_op["x"][1:]
+
+    ## Compute the covariance matrix conditional on the
+    ## reporting adjusted estimates
+    x0 = np.ones((neglp.num_sias+1,))
+    x0[0] = neglp.logS0
+    x0[1:] = neglp.mu
+    hessian = neglp.fixed_rt_hessian(x0)
+    cov = np.linalg.inv(hessian)
+    
+    ## Finalize the uncertainty estimates
+    overall_var = np.diag(cov)
+    neglp.logS0_var = overall_var[0]
+    neglp.mu_var = overall_var[1:]  
+
+    ## Finally, fully specify the transmission parameters using the
     ## SIA and reporting rate estimates via the optimization above
     adj_cases = ((state_df["cases"].values+1.)/neglp.r_hat)-1.
     adj_births = state_df["adj_births"].values
