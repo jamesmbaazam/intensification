@@ -16,12 +16,17 @@ from scipy.optimize import minimize
 
 class NeighborhoodPosterior(object):
 
-	""" Limited version of the strong prior model to estimate SIA stuff only, which we need to
-	create regularizing inputs for the state level """
+	""" Limited version of the full model to estimate SIA impact only, which we need to
+	create regularizing inputs for the state level. See the discussion around Appendix 2,
+	equations 3 and 4. 
+
+	This object encapsulates methods to evaluate the heirachical posterior distribution in
+	different ways and its gradient to facilitate model fitting. """
 
 	def __init__(self,df,sia_effects,S0,S0_var,beta_corr=3.,tau=26,mu_guess=0.1):
 
-		## Store some information about the model
+		## Store some information about the model, i.e.
+		## inputs and their structure.
 		self.T = len(df)-1
 		self.beta_corr = beta_corr
 		self.C_t = df["cases"].values
@@ -29,18 +34,22 @@ class NeighborhoodPosterior(object):
 		self.sias = sia_effects.values
 		self.num_sias = self.sias.shape[1]
 
-		## Regularize S0?
+		## Information needed to regularize 
+		## S0 from the annualize-time prior, which we choose to
+		## implement in log-space for numerical stability
+		## reasons.
 		self.logS0_prior = np.log(S0)
 		self.logS0_prior_var = S0_var/(S0**2)
 		self.logS0 = np.log(S0)
 		self.logS0_var = S0_var/(S0**2)
 
-		## Set the initial guess for mu
+		## Set the initial guess for mu, the fraction
+		## of sia doses that seroconvert a susceptible.
 		self.mu = mu_guess*np.ones((self.num_sias,))
 		self.mu_var = np.zeros((self.num_sias,))
 		
 		## Initialize key pieces, like the periodic smoothing
-		## matrix.
+		## matrix associated with the seasonality prior..
 		self.tau = tau
 		D2 = np.diag(tau*[-2])+np.diag((tau-1)*[1],k=1)+np.diag((tau-1)*[1],k=-1)
 		D2[0,-1] = 1 ## Periodic BCs
@@ -59,13 +68,16 @@ class NeighborhoodPosterior(object):
 
 	def compartment_df(self):
 
-		## Compute key quantities
+		## Compute key quantities related to the populations
+		## in the different model compartments. In this formulation
+		## E_t (exposed) is simply I_t (infectious) shifted by one
+		## time step.
 		adj_sias = (self.mu*self.sias[:-1]).sum(axis=1)
 		E_t = self.adj_cases[1:]
 		I_t = self.adj_cases[:-1]
 		S_t = np.exp(self.logS0) + np.cumsum(self.B_t[:-1]-E_t-adj_sias)
 		
-		## Pack them up
+		## Pack them up into a single dataframe.
 		time = np.arange(0,len(I_t)+1)
 		E_t = pd.Series(E_t,index=time[1:],name="E_t")
 		I_t = pd.Series(I_t,index=time[:-1],name="I_t")
@@ -75,47 +87,52 @@ class NeighborhoodPosterior(object):
 		
 	def fixed_rt(self,theta):
 
-		## Unpack 
+		''' Evaluate the posterior on iterations where adj_cases is fixed. '''
+
+		## Unpack the input array.
 		S0 = np.exp(theta[0])
 		mu = theta[1:]
 
-		## Compute key quantities
+		## Compute key quantities associated with
+		## the model populations.
 		adj_sias = (mu*self.sias[:-1]).sum(axis=1)
 		E_t = self.adj_cases[1:]
 		I_t = self.adj_cases[:-1]
 		S_t = S0 + np.cumsum(self.B_t[:-1]-E_t-adj_sias)
 		Y_t = np.log(E_t)-np.log(I_t)-np.log(S_t)
 
-		## Solve the linear regression problem
+		## Solve the linear regression problem associated with
+		## the transmission rate.
 		Y_hat = np.dot(self.H,Y_t)
 		RSS = np.sum((Y_t-Y_hat)**2)
 		lnp_beta = 0.5*self.T*np.log(RSS/self.T)
 
-		## If you added S0 var
+		## Add the prior for S0.
 		lnp_S0 = 0.5*((theta[0]-self.logS0_prior)**2)/(self.logS0_prior_var)
 		
 		return lnp_beta + lnp_S0
 
 	def fixed_rt_grad(self,theta):
 
-		## Unpack 
+		## Unpack the input array.
 		S0 = np.exp(theta[0])
 		mu = theta[1:]
 
-		## Compute key quantities
+		## Compute key quantities associated with
+		## the model populations.
 		adj_sias = (mu*self.sias[:-1]).sum(axis=1)
 		E_t = self.adj_cases[1:]
 		I_t = self.adj_cases[:-1]
 		S_t = S0 + np.cumsum(self.B_t[:-1]-E_t-adj_sias)
 		Y_t = np.log(E_t)-np.log(I_t)-np.log(S_t)
-
-		## Solve the linear regression problem and compute
-		## The implied variance
+		
+		## Solve the linear regression problem associated with
+		## the transmission rate.
 		Y_hat = np.dot(self.H,Y_t)
 		resid = Y_t-Y_hat
 		var = np.sum(resid**2)/self.T
 
-		## Compute the contribution from S_t
+		## Compute the contribution from the S_t prior.
 		dYdt0 = -S0/S_t 
 		grad_t = np.dot(dYdt0-np.dot(self.H,dYdt0),resid)/var
 		grad_t += (theta[0]-self.logS0_prior)/self.logS0_prior_var
@@ -183,9 +200,17 @@ class NeighborhoodPosterior(object):
 
 class HoodRegularizedModel(object):
 
+	""" This is the main model class, to be applied at the level-of-interest (state level in the 
+	paper), which takes the regularizing model output above as input. See the discussion around 
+	appendix 2, equations 1 and 2 and equation 6. 
+
+	This object encapsulates methods to evaluate the heirachical posterior distribution in
+	different ways and its gradient to facilitate model fitting. """
+
 	def __init__(self,df,sia_effects,S0,S0_var,hood_t,beta_corr=3.,tau=26,mu_guess=0.1):
 
-		## Store some information about the model
+		## Store some information about the model, including
+		## the inputs and problem size.
 		self.T = len(df)-1
 		self.beta_corr = beta_corr
 		self.C_t = df["cases"].values
@@ -193,33 +218,36 @@ class HoodRegularizedModel(object):
 		self.sias = sia_effects.values
 		self.num_sias = self.sias.shape[1]
 
-		## Regularize S0?
+		## Information needed to regularize 
+		## S0 from the annualize-time prior, which we choose to
+		## implement in log-space for numerical stability
+		## reasons.
 		self.logS0_prior = np.log(S0)
 		self.logS0_prior_var = S0_var/(S0**2)
 		self.logS0 = np.log(S0)
 		self.logS0_var = S0_var/(S0**2)
 
-		## Set the initial guess for mu
+		## Set the initial guess for mu, the SIA efficacy.
 		self.mu = mu_guess*np.ones((self.num_sias,))
 		self.mu_var = np.zeros((self.num_sias,))
 
-		## And the reporting rate prior pieces
+		## And set up the reporting rate prior pieces
 		self.r_prior = df["rr_p"].values
 		self.r_prior_precision = np.diag(1./(df["rr_p_var"].values))
 		self.r_floor = (df["rr_p"]-4.*np.sqrt(df["rr_p_var"])).min()
 		self.r_hat = df["rr_p"].values
 		
-		## Initialize key pieces, like the periodic smoothing
-		## matrix.
+		## Initialize key regression pieces, like the periodic smoothing
+		## matrix to be applied to the seasonality profile.
 		self.tau = tau
 		D2 = np.diag(tau*[-2])+np.diag((tau-1)*[1],k=1)+np.diag((tau-1)*[1],k=-1)
 		D2[0,-1] = 1 ## Periodic BCs
 		D2[-1,0] = 1
 		self.pRW2 = np.dot(D2.T,D2)*((beta_corr**4)/4.)
 
-		## Which fits into a regularization matrix sized to account
-		## for the scale factor between seasonalities (frequency dependent 
-		## transmission, lol)
+		## The above fits into a regularization matrix sized to account
+		## for the scale factor between seasonalities, gamma in the
+		## manuscript's appendix 2 equation 2.
 		self.lam = np.zeros((self.tau+1,self.tau+1))
 		self.lam[1:,1:] = self.pRW2
 
@@ -229,7 +257,7 @@ class HoodRegularizedModel(object):
 					np.log(hood_t["I_t"].values[:-1])-\
 					np.log(hood_t["S_t"].values[:-1])
 		assert len(self.Y_N) == self.T,\
-			"The state and hood dfs have to be on the same time-scale."
+			"The state and hood dfs have to be on the same time-index."
 
 		## Construct the full design matrix, first by making one for a single
 		## time series, then duplicating it and adding the scale factor column.
@@ -246,11 +274,13 @@ class HoodRegularizedModel(object):
 
 	def fixed_mu(self,theta):
 
+		''' Evaluate the posterior on iterations where SIA impact, mu, is fixed. '''
+
 		## Unpack the input
 		S0 = np.exp(theta[0])
 		r_t = theta[1:]
 	
-		## Compute the implied model compartments
+		## Compute the implied model compartments populations.
 		adj_cases = (self.C_t+1.)/r_t - 1.
 		adj_sias = (self.mu*self.sias[:-1]).sum(axis=1)
 		E_t = adj_cases[1:]
@@ -266,10 +296,10 @@ class HoodRegularizedModel(object):
 		RSS = np.sum((Y_tot-Y_hat)**2)
 		lnp_beta = 0.5*(2.*self.T)*np.log(RSS/(2.*self.T))
 
-		## If you added S0 var
+		## Compute the S0 prior term
 		lnp_S0 = 0.5*((theta[0]-self.logS0_prior)**2)/self.logS0_prior_var
 		
-		## Compute the r_t component
+		## Compute the r_t prior term.
 		lnp_rt = 0.5*np.sum(((r_t-self.r_prior)**2)*np.diag(self.r_prior_precision))
 
 		return lnp_beta + lnp_rt + lnp_S0
@@ -320,11 +350,14 @@ class HoodRegularizedModel(object):
 
 	def fixed_rt(self,theta):
 
+		''' Evaluate the posterior on iterations where adj_cases is fixed. '''
+
 		## Unpack 
 		S0 = np.exp(theta[0])
 		mu = theta[1:]
 
-		## Compute key quantities
+		## Compute key quantities, i.e. compartment
+		## populations in the state level model.
 		adj_cases = (self.C_t+1.)/self.r_hat - 1.
 		adj_sias = (mu*self.sias[:-1]).sum(axis=1)
 		E_t = adj_cases[1:]
@@ -340,7 +373,7 @@ class HoodRegularizedModel(object):
 		RSS = np.sum((Y_tot-Y_hat)**2)
 		lnp_beta = 0.5*(2.*self.T)*np.log(RSS/(2.*self.T))
 
-		## If you added S0 var
+		## Add the prior contribution from S0.
 		lnp_S0 = 0.5*((theta[0]-self.logS0_prior)**2)/(self.logS0_prior_var)
 		
 		return lnp_beta + lnp_S0
@@ -445,6 +478,10 @@ class HoodRegularizedModel(object):
 
 	def __call__(self,theta):
 
+		''' Evaluate the full, heirachical posterior across all parameters. This is mainly to facilitate
+		visualization, posterior profiling, etc. as opposed to model fitting (which is more stable in stages
+		as above). '''
+
 		## Unpack 
 		S0 = np.exp(theta[0])
 		mu = theta[1:self.num_sias+1]
@@ -474,10 +511,12 @@ class HoodRegularizedModel(object):
 
 		return lnp_beta + lnp_rt + lnp_S0
 
-## Some helper functions
+######################################################################################################
+## Some helper functions used throughout the model scripts.
+######################################################################################################
 def get_age_pyramid(state,fname=os.path.join("_data","grid3_population_by_state.csv")):
 
-    ## Get the output from geopode
+    ## Get the output from grid3
     df = pd.read_csv(fname,index_col=0)\
             .set_index(["state","age_bin"])
     df = df.loc[state].reset_index()
@@ -488,7 +527,7 @@ def get_age_pyramid(state,fname=os.path.join("_data","grid3_population_by_state.
     df["age"] = df["age_bin"].apply(lambda s: int(s.split()[0]))
     df = df.sort_values("age")
 
-    ## Interpolate to a 
+    ## Interpolate to yearly bins.
     pyramid = df[["age","total"]].set_index("age")["total"]
     pyramid = pyramid.reindex(np.arange(pyramid.index[-1]+5)).fillna(method="ffill")
     pyramid.loc[1:4] = pyramid.loc[1:4]/4
@@ -501,7 +540,11 @@ def get_age_pyramid(state,fname=os.path.join("_data","grid3_population_by_state.
 
 def prep_model_inputs(state,time_index,epi,cr,dists,mcv1_effic=0.825,mcv2_effic=0.95):
 
-    ## Start by aggregating the epi data
+	'''This functions prepares the dataframe that has all the key inputs (cases, births, etc.) on the
+	same time scale and in terms of the necessary inputs to the model (RI adjusted births, for example). '''
+
+    ## Start by aggregating the epi data to the semi-monthly timescale.
+    ## SMS: SemiMonthly-Start, i.e. first and 15th of every month.
     df = epi.resample("SMS").agg({"cases":"sum",
                                   "rejected":"sum",
                                   "births":"sum",
@@ -514,7 +557,7 @@ def prep_model_inputs(state,time_index,epi,cr,dists,mcv1_effic=0.825,mcv2_effic=
     df["births_var"] = df["births_var"].rolling(2).mean()
     df = df.loc[time_index] 
 
-    ## Add a population column
+    ## Add a population column, which is constant over time.
     _, population = get_age_pyramid(state)
     df["population"] = len(df)*[population]
 
@@ -539,7 +582,9 @@ def prep_model_inputs(state,time_index,epi,cr,dists,mcv1_effic=0.825,mcv2_effic=
     df["initial_S0"] = len(df)*[initial_S0]
     df["initial_S0_var"] = len(df)*[initial_S0_var]
 
-    ## Set up some survival corrections.
+    ## Experimentally add some survival corrections to account for infection
+    ## before RI. In sensitivity testing, this is a small effect, and we set it to 0
+    ## for the manuscript, but retain the functionality here.
     survival = 1.-np.cumsum(0*dists,axis=1)
     pr_sus_at_mcv1 = survival[0]
     pr_sus_at_mcv1.index = pd.to_datetime({"year":pr_sus_at_mcv1.index,
@@ -552,13 +597,13 @@ def prep_model_inputs(state,time_index,epi,cr,dists,mcv1_effic=0.825,mcv2_effic=
     pr_sus_at_mcv2 = pr_sus_at_mcv2.resample("d").interpolate().reindex(time_index)
     pr_sus_at_mcv2 = pr_sus_at_mcv2.fillna(method="ffill")
 
-    ## Set up vaccination
+    ## Set up vaccination corrections (i.e. sink terms).
     df["v1"] = (df["births"]*mcv1_effic*pr_sus_at_mcv1*df["mcv1"]).shift(18).fillna(method="bfill")
     df["v1_var"] = mcv1_effic*pr_sus_at_mcv1*(df["births"]*df["mcv1"]*(1.-df["mcv1"])+\
                     df["mcv1_var"]*(df["births"]**2)+\
                     df["births_var"]*(df["mcv1"]**2)).shift(18).fillna(method="bfill")
 
-    ## Compute immunizations from MCV2
+    ## Compute immunizations from MCV2 as well.
     mcv1_failures = df["v1"]*(1.-mcv1_effic)/mcv1_effic
     mcv1_failures_var = df["v1_var"]*(1.-mcv1_effic)/mcv1_effic
     df["v2"] = (mcv2_effic*df["mcv2"]*pr_sus_at_mcv2*mcv1_failures).shift(30-18).fillna(method="bfill")
@@ -566,11 +611,14 @@ def prep_model_inputs(state,time_index,epi,cr,dists,mcv1_effic=0.825,mcv2_effic=
                     df["mcv2_var"]*(mcv1_failures**2)+\
                     mcv1_failures_var*(df["mcv2"]**2)).shift(30-18).fillna(method="bfill")
 
-    ## Construct adjusted births
+    ## Construct adjusted births, i.e. the estimate of the number of births
+    ## missed by RI that become susceptible.
     df["adj_births"] = df["births"]-df["v1"]-df["v2"]
     df["adj_births_var"] = df["births_var"]+df["v1_var"]+df["v2_var"]
 
-    ## Collect effects besides SIA and initial susceptibility
+    ## Collect effects besides SIA and initial susceptibility, i.e. the growth in
+    ## susceptibility in the absence of SIAs and infection. This is just for convenience, to
+    ## not have to repeatedly accumulate adj_births.
     df = df.loc["2009-01-01":]
     df["S_t_tilde"] = np.cumsum(df["adj_births"])
 
@@ -604,12 +652,17 @@ def prep_sia_effects(cal,time_index,md=False):
     sia_effects = sia_effects.pivot(index="time",columns="sia_num",values="doses")
     sia_effects = sia_effects.reindex(time_index).fillna(0)
 
+    ## Return with meta data in some instances, otherwise just send
+    ## back the time series.
     if md:
     	return sia_effects, sia_metadata
     else:
     	return sia_effects
 
 def fit_the_neighborhood_model(region,hood_df,hood_sias,initial_mu_guess=0.1):
+
+	'''This function fits the model at the neighborhood level, leveraging the class above and 
+	encapsulated methods therein. '''
 
 	## Create a model object.
     hoodP = NeighborhoodPosterior(
@@ -645,6 +698,9 @@ def fit_the_neighborhood_model(region,hood_df,hood_sias,initial_mu_guess=0.1):
     return hoodP
 
 def fit_the_regularized_model(state,state_df,state_sias,hood_t,initial_mu_guess=0.5):
+
+	'''This function fits the model at the state level, leveraging the class above, i.e. the 
+	encapsulated methods therein, as well as the fitted neighborhood model output (hood_t). '''
 
 	## Then use that estimate of the compartments to
     ## inform seasonality in the state level model.
