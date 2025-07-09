@@ -82,7 +82,7 @@ class NeighborhoodPosterior(object):
         E_t = pd.Series(E_t,index=time[1:],name="E_t")
         I_t = pd.Series(I_t,index=time[:-1],name="I_t")
         S_t = pd.Series(S_t,index=time[:-1],name="S_t")
-        out = pd.concat([E_t,I_t,S_t],axis=1)
+        out = pd.concat([E_t,I_t,S_t],axis=1).sort_index()
         return out
         
     def fixed_rt(self,theta):
