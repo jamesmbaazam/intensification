@@ -101,9 +101,6 @@ if __name__ == "__main__":
 	#D2[0,2] = 1
 	D2[-1,-3] = 1
 	RW2 = ((4**4)/8.)*np.dot(D2.T,D2)
-	plt.matshow(RW2)
-	plt.show()
-	sys.exit()
 
 	## Finally subset the data in fit and prediction pieces
 	cols = fixed_ef+\
