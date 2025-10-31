@@ -250,10 +250,10 @@ def compute_profile(pI,epi,prA_given_I,
     ## scalar or a vector across cohorts.
     if np.isscalar(pI):
         FprA_and_I = pI*\
-            np.cumsum(prA_given_I.reindex(epi.index).fillna(method="bfill"),axis=1)
+            np.cumsum(prA_given_I.reindex(epi.index).bfill(),axis=1)
     else:
         FprA_and_I = pI.values[:,None]*\
-            np.cumsum(prA_given_I.reindex(pI.index).fillna(method="bfill"),axis=1)
+            np.cumsum(prA_given_I.reindex(pI.index).bfill(),axis=1)
 
     ## Compute the RI component to immunity
     ## First for MCV1, which means that you're eligible, not yet
@@ -420,7 +420,7 @@ if __name__ == "__main__":
 
     ## Compute the contribution currently left to infection
     pr_inf = 1. - (imm_profile.sum(axis=1))
-    prA_and_I = pr_inf.values[:,None]*(prA_given_I.reindex(pr_inf.index).fillna(method="bfill"))
+    prA_and_I = pr_inf.values[:,None]*(prA_given_I.reindex(pr_inf.index).bfill())
 
     ## And how much of that has already happened? We use the age
     ## at infection distribution to compute the expected infections in
@@ -437,11 +437,11 @@ if __name__ == "__main__":
     ## estimate the initial susceptible population
     ## For SIAs
     model_period_sias = sias.md.loc[sias.md["time"].dt.year >= df.index[0],"name"]
-    S0 = (df["births"].reindex(imm_profile.index).fillna(method="bfill").values[:,None]\
+    S0 = (df["births"].reindex(imm_profile.index).bfill().values[:,None]\
          *imm_profile[model_period_sias]).loc[:df.index[0]-1].sum().sum()
-    S0_var = (df["births"].reindex(imm_profile.index).fillna(method="bfill").values[:,None]\
+    S0_var = (df["births"].reindex(imm_profile.index).bfill().values[:,None]\
             *(imm_profile[model_period_sias])*(1-imm_profile[model_period_sias])\
-            +df["births_var"].reindex(imm_profile.index).fillna(method="bfill").values[:,None]\
+            +df["births_var"].reindex(imm_profile.index).bfill().values[:,None]\
             *(imm_profile[model_period_sias]**2))\
             .loc[:df.index[0]-1].sum().sum()
 
@@ -461,11 +461,11 @@ if __name__ == "__main__":
         >= df.index[0]
         )] = 1.
     inf_after_t0 = (mask*prA_and_I).sum(axis=1)
-    S0 += (df["births"].reindex(pr_inf.index).fillna(method="bfill")\
+    S0 += (df["births"].reindex(pr_inf.index).bfill()\
             *inf_after_t0).loc[:df.index[0]-1].sum()
-    S0_var += (df["births"].reindex(pr_inf.index).fillna(method="bfill")\
+    S0_var += (df["births"].reindex(pr_inf.index).bfill()\
             *inf_after_t0*(1.-inf_after_t0)\
-            + df["births_var"].reindex(pr_inf.index).fillna(method="bfill")\
+            + df["births_var"].reindex(pr_inf.index).bfill()\
             *(inf_after_t0**2)).loc[:df.index[0]-1].sum()
 
     ## Compute estimates of infectious populations. Start by making
@@ -480,8 +480,8 @@ if __name__ == "__main__":
     
     ## Calculate the expected infections and the variance from birth 
     ## cohort uncertainty.
-    expI = df["births"].reindex(PST.index).fillna(method="bfill").values[:,None]*PST
-    varI = df["births_var"].reindex(PST.index).fillna(method="bfill").values[:,None]*(PST**2)
+    expI = df["births"].reindex(PST.index).bfill().values[:,None]*PST
+    varI = df["births_var"].reindex(PST.index).bfill().values[:,None]*(PST**2)
     phi = expI.sum(axis=0).loc[df.index]
 
     ## And the least-squares reporting rate estimate, as a simple initial

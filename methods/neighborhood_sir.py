@@ -529,7 +529,7 @@ def get_age_pyramid(state,fname=os.path.join("_data","grid3_population_by_state.
 
     ## Interpolate to yearly bins.
     pyramid = df[["age","total"]].set_index("age")["total"]
-    pyramid = pyramid.reindex(np.arange(pyramid.index[-1]+5)).fillna(method="ffill")
+    pyramid = pyramid.reindex(np.arange(pyramid.index[-1]+5)).ffill()
     pyramid.loc[1:4] = pyramid.loc[1:4]/4
     pyramid.loc[5:] = pyramid.loc[5:]/5
 
@@ -572,7 +572,7 @@ def prep_model_inputs(state,time_index,epi,cr,dists,mcv1_effic=0.825,mcv2_effic=
                                        "day":15})
     rr_prior = rr_prior.set_index("time")
     rr_prior = rr_prior.resample("d").interpolate().reindex(df.index)
-    rr_prior = rr_prior.fillna(method="bfill").fillna(method="ffill")
+    rr_prior = rr_prior.bfill().ffill()
     
     ## Add the reporting rate prior information to the 
     ## overall dataframe.
@@ -590,26 +590,26 @@ def prep_model_inputs(state,time_index,epi,cr,dists,mcv1_effic=0.825,mcv2_effic=
     pr_sus_at_mcv1.index = pd.to_datetime({"year":pr_sus_at_mcv1.index,
                                            "month":6,"day":15})
     pr_sus_at_mcv1 = pr_sus_at_mcv1.resample("d").interpolate().reindex(time_index)
-    pr_sus_at_mcv1 = pr_sus_at_mcv1.fillna(method="ffill")
+    pr_sus_at_mcv1 = pr_sus_at_mcv1.ffill()
     pr_sus_at_mcv2 = survival[1]
     pr_sus_at_mcv2.index = pd.to_datetime({"year":pr_sus_at_mcv2.index,
                                            "month":6,"day":15})
     pr_sus_at_mcv2 = pr_sus_at_mcv2.resample("d").interpolate().reindex(time_index)
-    pr_sus_at_mcv2 = pr_sus_at_mcv2.fillna(method="ffill")
+    pr_sus_at_mcv2 = pr_sus_at_mcv2.ffill()
 
     ## Set up vaccination corrections (i.e. sink terms).
-    df["v1"] = (df["births"]*mcv1_effic*pr_sus_at_mcv1*df["mcv1"]).shift(18).fillna(method="bfill")
+    df["v1"] = (df["births"]*mcv1_effic*pr_sus_at_mcv1*df["mcv1"]).shift(18).bfill()
     df["v1_var"] = mcv1_effic*pr_sus_at_mcv1*(df["births"]*df["mcv1"]*(1.-df["mcv1"])+\
                     df["mcv1_var"]*(df["births"]**2)+\
-                    df["births_var"]*(df["mcv1"]**2)).shift(18).fillna(method="bfill")
+                    df["births_var"]*(df["mcv1"]**2)).shift(18).bfill()
 
     ## Compute immunizations from MCV2 as well.
     mcv1_failures = df["v1"]*(1.-mcv1_effic)/mcv1_effic
     mcv1_failures_var = df["v1_var"]*(1.-mcv1_effic)/mcv1_effic
-    df["v2"] = (mcv2_effic*df["mcv2"]*pr_sus_at_mcv2*mcv1_failures).shift(30-18).fillna(method="bfill")
+    df["v2"] = (mcv2_effic*df["mcv2"]*pr_sus_at_mcv2*mcv1_failures).shift(30-18).bfill()
     df["v2_var"] = mcv2_effic*pr_sus_at_mcv2*(mcv1_failures*df["mcv2"]*(1.-df["mcv2"])+\
                     df["mcv2_var"]*(mcv1_failures**2)+\
-                    mcv1_failures_var*(df["mcv2"]**2)).shift(30-18).fillna(method="bfill")
+                    mcv1_failures_var*(df["mcv2"]**2)).shift(30-18).bfill()
 
     ## Construct adjusted births, i.e. the estimate of the number of births
     ## missed by RI that become susceptible.

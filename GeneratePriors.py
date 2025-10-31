@@ -38,11 +38,11 @@ if __name__ == "__main__":
         
         ## Loop over states
         print("\nLooping over states...")
-        for i, state in states.iteritems():
+        for i, state in states.items():
 
             print("Prior construction for {} ({}/{})...".format(state.upper(),i+1,len(states)))
             subprocess.run("python SurvivalPrior.py {} -s".format(state),
-                    capture_output=~_verbose,shell=True)
+                    capture_output=not(_verbose),shell=True)
 
             ## Get and store the output dataframe
             prior_dfs[state] = pd.read_pickle(os.path.join("pickle_jar","survival_prior.pkl"))
@@ -57,7 +57,6 @@ if __name__ == "__main__":
 
             ## Save it to the pdf book.
             book.savefig(fig)
-            plt.close(fig)
 
         ## Set some PDF metadata
         d = book.infodict()
@@ -67,5 +66,5 @@ if __name__ == "__main__":
     ## Put the outputs together
     output = pd.concat(prior_dfs.values(),keys=prior_dfs.keys())
     print("\nCoarse regression estimates (to pickle):")
-    print(output)
+   # print(output)
     output.to_pickle(os.path.join("pickle_jar","coarse_outputs_by_state.pkl"))
